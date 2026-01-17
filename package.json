@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "vercel-build": "tsc"
   },
   "keywords": [
     "mcp",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@vercel/node": "^3.0.0",
     "typescript": "^5.3.0"
   },
   "engines": {
