@@ -59,6 +59,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const tokens = getTokensFromRequest(req);
 
   if (!tokens) {
+    // Get base URL for the resource_metadata link
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const baseUrl = `${protocol}://${host}`;
+
+    // Return 401 with WWW-Authenticate header pointing to OAuth metadata (RFC 9728)
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
+    );
     return res.status(401).json({
       error: "Unauthorized",
       message: "Please connect your Matter account using the Connect button",
