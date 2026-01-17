@@ -1,5 +1,7 @@
 {
+  "version": 2,
   "buildCommand": "npm run vercel-build",
+  "outputDirectory": ".",
   "functions": {
     "api/mcp.ts": {
       "maxDuration": 60
