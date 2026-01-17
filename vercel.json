@@ -2,14 +2,14 @@
   "version": 2,
   "buildCommand": "npm run vercel-build",
   "outputDirectory": ".",
-  "rewrites": [
+  "routes": [
     {
-      "source": "/.well-known/oauth-protected-resource",
-      "destination": "/api/well-known-oauth-protected-resource"
+      "src": "/.well-known/oauth-protected-resource",
+      "dest": "/api/well-known-oauth-protected-resource"
     },
     {
-      "source": "/.well-known/oauth-authorization-server",
-      "destination": "/api/well-known-oauth-authorization-server"
+      "src": "/.well-known/oauth-authorization-server",
+      "dest": "/api/well-known-oauth-authorization-server"
     }
   ],
   "functions": {
