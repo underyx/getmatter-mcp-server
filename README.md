@@ -42,9 +42,39 @@ export MATTER_ACCESS_TOKEN="your-access-token"
 export MATTER_REFRESH_TOKEN="your-refresh-token"
 ```
 
-## Usage with Claude Desktop
+## Usage with claude.ai (Vercel Deployment)
 
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
+Deploy to Vercel for use with claude.ai as a remote MCP server:
+
+### 1. Deploy to Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/underyx/getmatter-mcp-server)
+
+Or deploy manually:
+
+```bash
+npm install -g vercel
+vercel
+```
+
+### 2. Set Environment Variables
+
+In your Vercel project settings, add:
+- `MATTER_ACCESS_TOKEN`: Your Matter access token
+- `MATTER_REFRESH_TOKEN`: Your Matter refresh token
+
+### 3. Add to claude.ai
+
+1. Go to [claude.ai](https://claude.ai) Settings
+2. Navigate to **MCP Servers** (or Integrations)
+3. Add a new remote MCP server with URL:
+   ```
+   https://your-project.vercel.app/api/mcp
+   ```
+
+## Usage with Claude Desktop (Local)
+
+For local use with Claude Desktop, add to your configuration (`claude_desktop_config.json`):
 
 ```json
 {
