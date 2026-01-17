@@ -69,6 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       "WWW-Authenticate",
       `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
     );
+    res.setHeader("Access-Control-Expose-Headers", "WWW-Authenticate");
     return res.status(401).json({
       error: "Unauthorized",
       message: "Please connect your Matter account using the Connect button",
