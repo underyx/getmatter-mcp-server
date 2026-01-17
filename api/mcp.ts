@@ -2,7 +2,7 @@
  * Matter MCP Server - Vercel API Route
  *
  * This API route handles MCP communication over Streamable HTTP for use with claude.ai.
- * Tokens are passed from the client via headers, not stored on the server.
+ * Tokens are passed via Bearer token from OAuth flow.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -11,27 +11,31 @@ import type { MatterTokens } from "../dist/matter-api.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 function getTokensFromRequest(req: VercelRequest): MatterTokens | null {
-  // Try custom headers first
+  const authHeader = req.headers.authorization;
+
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+
+    // Try to decode as our combined token format (base64 JSON)
+    try {
+      const decoded = JSON.parse(Buffer.from(token, "base64").toString("utf-8"));
+      if (decoded.accessToken && decoded.refreshToken) {
+        return {
+          accessToken: decoded.accessToken,
+          refreshToken: decoded.refreshToken,
+        };
+      }
+    } catch {
+      // Not our format, fall through
+    }
+  }
+
+  // Fallback: Try custom headers (for manual configuration)
   const accessToken = req.headers["x-matter-access-token"] as string | undefined;
   const refreshToken = req.headers["x-matter-refresh-token"] as string | undefined;
 
   if (accessToken && refreshToken) {
     return { accessToken, refreshToken };
-  }
-
-  // Try Basic Auth (for OAuth Client ID/Secret from claude.ai)
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Basic ")) {
-    try {
-      const base64 = authHeader.slice(6);
-      const decoded = Buffer.from(base64, "base64").toString("utf-8");
-      const [clientId, clientSecret] = decoded.split(":");
-      if (clientId && clientSecret) {
-        return { accessToken: clientId, refreshToken: clientSecret };
-      }
-    } catch {
-      // Invalid base64, fall through
-    }
   }
 
   return null;
@@ -42,7 +46,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Matter-Access-Token, X-Matter-Refresh-Token, Mcp-Session-Id");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Matter-Access-Token, X-Matter-Refresh-Token, Mcp-Session-Id"
+    );
     return res.status(204).end();
   }
 
@@ -53,8 +60,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (!tokens) {
     return res.status(401).json({
-      error: "Missing Matter API tokens",
-      hint: "Provide X-Matter-Access-Token and X-Matter-Refresh-Token headers, or use Basic Auth with access token as username and refresh token as password",
+      error: "Unauthorized",
+      message: "Please connect your Matter account using the Connect button",
     });
   }
 

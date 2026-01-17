@@ -15,36 +15,9 @@ npm install
 npm run build
 ```
 
-## Getting Your Matter API Tokens
-
-Matter doesn't have a public API, but you can obtain tokens through the Obsidian plugin:
-
-1. Install [Obsidian](https://obsidian.md/) if you haven't already
-2. Install the [Matter plugin](https://github.com/getmatterapp/obsidian-matter) from Community Plugins
-3. Open Matter plugin settings in Obsidian
-4. Open the Matter app on your phone
-5. Go to **Profile → Settings → Connected Accounts → Obsidian**
-6. Scan the QR code shown in Obsidian
-7. Find your tokens in `.obsidian/plugins/matter/data.json`:
-   ```json
-   {
-     "accessToken": "your-access-token",
-     "refreshToken": "your-refresh-token"
-   }
-   ```
-
-## Configuration
-
-Set these environment variables:
-
-```bash
-export MATTER_ACCESS_TOKEN="your-access-token"
-export MATTER_REFRESH_TOKEN="your-refresh-token"
-```
-
 ## Usage with claude.ai (Vercel Deployment)
 
-Deploy to Vercel for use with claude.ai as a remote MCP server. Your Matter tokens are passed securely from claude.ai - nothing is stored on the server.
+Deploy to Vercel for use with claude.ai as a remote MCP server. Uses OAuth-style QR code authentication - just click Connect and scan!
 
 ### 1. Deploy to Vercel
 
@@ -65,15 +38,30 @@ No environment variables needed - the server is stateless.
 2. Navigate to **MCP Servers** (or Integrations)
 3. Add a new remote MCP server:
    - **URL**: `https://your-project.vercel.app/api/mcp`
-   - **Headers**:
-     - `X-Matter-Access-Token`: Your Matter access token
-     - `X-Matter-Refresh-Token`: Your Matter refresh token
+   - **Authorization URL**: `https://your-project.vercel.app/api/oauth/authorize`
+   - **Token URL**: `https://your-project.vercel.app/api/oauth/token`
+4. Click **Connect**
+5. Scan the QR code with the Matter app on your phone
+6. Done! Your Matter account is now connected
 
-Your tokens are sent with each request and never stored on the server.
+Your tokens are obtained via QR code scan and stored securely by claude.ai.
 
 ## Usage with Claude Desktop (Local)
 
-For local use with Claude Desktop, add to your configuration (`claude_desktop_config.json`):
+For local use, you'll need to obtain tokens manually via the Obsidian plugin.
+
+### Getting Your Matter API Tokens
+
+1. Install [Obsidian](https://obsidian.md/)
+2. Install the [Matter plugin](https://github.com/getmatterapp/obsidian-matter) from Community Plugins
+3. Open Matter plugin settings in Obsidian - you'll see a QR code
+4. On your phone, open **Matter app → Profile → Settings → Connected Accounts → Obsidian**
+5. Scan the QR code
+6. Find your tokens in `.obsidian/plugins/matter/data.json`
+
+### Configuration
+
+Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
 ```json
 {
