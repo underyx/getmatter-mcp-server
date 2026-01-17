@@ -1,20 +1,17 @@
 /**
  * Matter MCP Server - Vercel API Route
  *
- * This API route handles MCP communication over HTTP/SSE for use with claude.ai.
+ * This API route handles MCP communication over Streamable HTTP for use with claude.ai.
  * Tokens are passed from the client via headers, not stored on the server.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createMatterServer } from "../dist/server.js";
 import type { MatterTokens } from "../dist/matter-api.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-// Store active transports and their associated tokens by session ID
-const sessions = new Map<string, { transport: SSEServerTransport; tokens: MatterTokens }>();
-
-function getTokensFromHeaders(req: VercelRequest): MatterTokens | null {
-  // Tokens passed via custom headers
+function getTokensFromRequest(req: VercelRequest): MatterTokens | null {
+  // Try custom headers first
   const accessToken = req.headers["x-matter-access-token"] as string | undefined;
   const refreshToken = req.headers["x-matter-refresh-token"] as string | undefined;
 
@@ -22,65 +19,54 @@ function getTokensFromHeaders(req: VercelRequest): MatterTokens | null {
     return { accessToken, refreshToken };
   }
 
+  // Try Basic Auth (for OAuth Client ID/Secret from claude.ai)
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Basic ")) {
+    try {
+      const base64 = authHeader.slice(6);
+      const decoded = Buffer.from(base64, "base64").toString("utf-8");
+      const [clientId, clientSecret] = decoded.split(":");
+      if (clientId && clientSecret) {
+        return { accessToken: clientId, refreshToken: clientSecret };
+      }
+    } catch {
+      // Invalid base64, fall through
+    }
+  }
+
   return null;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Handle CORS preflight first
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Matter-Access-Token, X-Matter-Refresh-Token");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Matter-Access-Token, X-Matter-Refresh-Token, Mcp-Session-Id");
     return res.status(204).end();
   }
 
-  if (req.method === "GET") {
-    // SSE connection - client wants to establish a session
-    const tokens = getTokensFromHeaders(req);
+  // Set CORS headers for all responses
+  res.setHeader("Access-Control-Allow-Origin", "*");
 
-    if (!tokens) {
-      return res.status(401).json({
-        error: "Missing Matter API tokens. Provide X-Matter-Access-Token and X-Matter-Refresh-Token headers.",
-      });
-    }
+  const tokens = getTokensFromRequest(req);
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-
-    const transport = new SSEServerTransport("/api/mcp", res);
-    const sessionId = transport.sessionId;
-    sessions.set(sessionId, { transport, tokens });
-
-    const server = createMatterServer(tokens);
-
-    // Clean up on close
-    res.on("close", () => {
-      sessions.delete(sessionId);
+  if (!tokens) {
+    return res.status(401).json({
+      error: "Missing Matter API tokens",
+      hint: "Provide X-Matter-Access-Token and X-Matter-Refresh-Token headers, or use Basic Auth with access token as username and refresh token as password",
     });
-
-    await server.connect(transport);
-    return;
   }
 
-  if (req.method === "POST") {
-    // Message from client
-    const sessionId = req.query.sessionId as string;
+  // Create server and transport for this request
+  const server = createMatterServer(tokens);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // Stateless mode
+  });
 
-    if (!sessionId) {
-      return res.status(400).json({ error: "Missing sessionId" });
-    }
+  // Connect server to transport
+  await server.connect(transport);
 
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return res.status(404).json({ error: "Session not found. Please reconnect." });
-    }
-
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    await session.transport.handlePostMessage(req, res);
-    return;
-  }
-
-  return res.status(405).json({ error: "Method not allowed" });
+  // Handle the request
+  await transport.handleRequest(req, res, req.body);
 }
