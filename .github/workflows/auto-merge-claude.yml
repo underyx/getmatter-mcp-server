@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   merge:
@@ -17,31 +16,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create and merge PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure git
         run: |
-          # Check if there are changes to merge
-          git fetch origin main
-          if git merge-base --is-ancestor ${{ github.sha }} origin/main; then
-            echo "Branch already merged into main, skipping"
-            exit 0
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Create PR if one doesn't exist
-          EXISTING_PR=$(gh pr list --head "${{ github.ref_name }}" --base main --json number --jq '.[0].number')
-
-          if [ -z "$EXISTING_PR" ]; then
-            PR_URL=$(gh pr create \
-              --title "Merge ${{ github.ref_name }} into main" \
-              --body "Automated PR to merge Claude branch into main." \
-              --head "${{ github.ref_name }}" \
-              --base main)
-            echo "Created PR: $PR_URL"
-            EXISTING_PR=$(gh pr list --head "${{ github.ref_name }}" --base main --json number --jq '.[0].number')
-          else
-            echo "PR #$EXISTING_PR already exists"
-          fi
-
-          # Merge the PR
-          gh pr merge "$EXISTING_PR" --merge --admin
+      - name: Merge to main
+        run: |
+          git checkout main
+          git merge --ff-only ${{ github.ref_name }} || git merge --no-edit ${{ github.ref_name }}
+          git push origin main
