@@ -211,7 +211,7 @@ export class MatterClient {
   }
 
   /**
-   * Get all articles from the user's library (highlights feed)
+   * Get all articles from the user's library
    * Supports pagination through the feed
    */
   async getArticles(options?: {
@@ -219,7 +219,8 @@ export class MatterClient {
     nextUrl?: string;
   }): Promise<{ articles: FeedEntry[]; nextUrl: string | null }> {
     const allArticles: FeedEntry[] = [];
-    let currentUrl: string | null = options?.nextUrl || "/library_items/highlights_feed/";
+    // Use the queue feed which should return all saved articles
+    let currentUrl: string | null = options?.nextUrl || "/library_items/queue_feed/";
     const limit = options?.limit || 100;
 
     while (currentUrl && allArticles.length < limit) {
