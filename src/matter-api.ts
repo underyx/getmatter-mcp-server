@@ -1,29 +1,54 @@
 /**
  * Matter API Client
  *
- * Based on reverse-engineered API from the Obsidian Matter plugin
- * @see https://github.com/getmatterapp/obsidian-matter
+ * Based on reverse-engineered API from the Matter web app
+ * @see https://web.getmatter.com/
  */
 
-const API_BASE = "https://api.getmatter.app/api/v11";
+const API_BASE = "https://api.getmatter.com/api/v20";
 
 export interface MatterTokens {
   accessToken: string;
   refreshToken: string;
 }
 
-export interface Author {
-  any_name: string;
-  domain: string | null;
-  url: string | null;
-  image_url: string | null;
+// Library state enum values from the API
+export enum LibraryState {
+  QUEUE = 1,
+  LATER = 2,
+  ARCHIVE = 3,
+  FEED = 4,
 }
 
-export interface Publisher {
-  name: string;
-  domain: string;
+export function libraryStateToString(state: number): string {
+  switch (state) {
+    case LibraryState.QUEUE:
+      return "QUEUE";
+    case LibraryState.LATER:
+      return "LATER";
+    case LibraryState.ARCHIVE:
+      return "ARCHIVE";
+    case LibraryState.FEED:
+      return "FEED";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+export interface Profile {
+  id: number;
+  profile_type: number;
+  first_name: string | null;
+  last_name: string | null;
+  name: string | null;
+  is_managed: boolean;
+  avatar_photo: string | null;
+  display_name: string | null;
+  any_name: string;
+  domain: string | null;
+  domain_photo: string | null;
   url: string | null;
-  favicon_url: string | null;
+  photo_url: string | null;
 }
 
 export interface Tag {
@@ -39,28 +64,79 @@ export interface Annotation {
   word_end: number;
 }
 
-export interface Content {
-  id: string;
+export interface Library {
+  id: number;
+  content_id: number;
+  library_state: number;
+  library_state_date: string;
+  modified_date: string;
+  is_favorited: boolean;
+  last_favorited_date: string | null;
+  rating: number | null;
+  queue_order: number;
+}
+
+export interface RssFeed {
+  id: number;
+  name: string;
+  photo_url: string | null;
+  url: string;
+}
+
+export interface Article {
+  id: number;
   url: string;
   title: string;
-  author: Author;
-  publisher: Publisher;
+  authors: string[];
+  publisher: Profile | null;
   publication_date: string | null;
-  my_tags: Tag[];
+  word_count: number | null;
+  reading_time_minutes: number | null;
+  markdown: string | null;
+  language: string | null;
+}
+
+export interface History {
+  id: number;
+  content_id: number;
+  last_viewed_date: string | null;
+  last_interaction_date: string | null;
+  last_annotated_date: string | null;
+  last_read_percentage: number | null;
+  max_read_percentage: number | null;
+}
+
+export interface Content {
+  id: number;
+  url: string;
+  title: string;
+  author: Profile | null;
+  publisher: Profile | null;
+  newsletter_profile: Profile | null;
+  rss_feed_profile: Profile | null;
+  publication_date: string | null;
+  feed_date: string | null;
+  sub_title: string | null;
+  excerpt: string | null;
+  blurb: string | null;
+  photo_thumbnail_url: string | null;
+  source_type: number;
+  history: History | null;
+  library: Library | null;
   my_annotations: Annotation[];
   my_note: string | null;
-  library_state: "QUEUE" | "LATER" | "ARCHIVE" | "FEED";
-  created_date: string;
-  reading_progress: number;
-  image_url: string | null;
-  word_count: number | null;
+  tags: Tag[];
+  rss_feed: RssFeed | null;
+  share_url: string | null;
+  article: Article | null;
+  content_type: number;
 }
 
 export interface FeedEntry {
   id: string;
   content: Content;
+  recommendations: unknown[];
   annotations: Annotation[];
-  feed_context: unknown | null;
 }
 
 export interface FeedResponse {
@@ -68,6 +144,8 @@ export interface FeedResponse {
   feed: FeedEntry[];
   next: string | null;
   previous: string | null;
+  queue_count?: number;
+  archive_count?: number;
 }
 
 export interface QRLoginResponse {
@@ -200,33 +278,55 @@ export class MatterClient {
   }
 
   /**
-   * Get all articles from the user's library (highlights feed)
+   * Get all articles from the user's library (updates feed)
    * Supports pagination through the feed
    */
   async getArticles(options?: {
     limit?: number;
-    nextUrl?: string;
-  }): Promise<{ articles: FeedEntry[]; nextUrl: string | null }> {
+    page?: number;
+    afterTimestamp?: string;
+  }): Promise<{ articles: FeedEntry[]; nextUrl: string | null; queueCount?: number; archiveCount?: number }> {
     const allArticles: FeedEntry[] = [];
-    let currentUrl: string | null = options?.nextUrl || "/library_items/highlights_feed/";
     const limit = options?.limit || 100;
+    let page = options?.page || 1;
 
-    while (currentUrl && allArticles.length < limit) {
-      const response: FeedResponse = await this.request<FeedResponse>(currentUrl);
+    // Use a very old timestamp to get all articles, or use provided timestamp
+    const afterTimestamp = options?.afterTimestamp || "1970-01-01T00:00:00.000000+00:00";
+
+    let hasMore = true;
+    let queueCount: number | undefined;
+    let archiveCount: number | undefined;
+
+    while (hasMore && allArticles.length < limit) {
+      const url = `/library_items/updates_feed/?after_timestamp=${encodeURIComponent(afterTimestamp)}&page=${page}`;
+      const response: FeedResponse = await this.request<FeedResponse>(url);
+
       allArticles.push(...response.feed);
-      currentUrl = response.next;
+
+      // Store counts from first response
+      if (page === 1) {
+        queueCount = response.queue_count;
+        archiveCount = response.archive_count;
+      }
+
+      hasMore = response.next !== null;
+      page++;
 
       if (allArticles.length >= limit) {
         return {
           articles: allArticles.slice(0, limit),
           nextUrl: response.next,
+          queueCount,
+          archiveCount,
         };
       }
     }
 
     return {
       articles: allArticles,
-      nextUrl: currentUrl,
+      nextUrl: null,
+      queueCount,
+      archiveCount,
     };
   }
 
@@ -236,19 +336,30 @@ export class MatterClient {
   async getArticle(articleId: string): Promise<FeedEntry | null> {
     // The API doesn't have a direct endpoint for single articles,
     // so we need to paginate through the feed to find it
-    let currentUrl: string | null = "/library_items/highlights_feed/";
+    const afterTimestamp = "1970-01-01T00:00:00.000000+00:00";
+    let page = 1;
+    let hasMore = true;
 
-    while (currentUrl) {
-      const feedResponse: FeedResponse = await this.request<FeedResponse>(currentUrl);
+    // Parse the articleId - it could be a string like "111847745" or a number
+    const numericId = parseInt(articleId, 10);
+
+    while (hasMore) {
+      const url = `/library_items/updates_feed/?after_timestamp=${encodeURIComponent(afterTimestamp)}&page=${page}`;
+      const feedResponse: FeedResponse = await this.request<FeedResponse>(url);
+
       const article = feedResponse.feed.find(
-        (entry: FeedEntry) => entry.id === articleId || entry.content.id === articleId
+        (entry: FeedEntry) =>
+          entry.id === articleId ||
+          entry.content.id === numericId ||
+          String(entry.content.id) === articleId
       );
 
       if (article) {
         return article;
       }
 
-      currentUrl = feedResponse.next;
+      hasMore = feedResponse.next !== null;
+      page++;
     }
 
     return null;
@@ -279,6 +390,7 @@ export class MatterClient {
       headers: {
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({ client_type: "integration" }),
     });
 
     if (!response.ok) {
