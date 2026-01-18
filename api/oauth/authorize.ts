@@ -18,16 +18,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Trigger QR login to get session token
-  const triggerResponse = await fetch(`${MATTER_API}/qr_login/trigger/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
+  let triggerData: Record<string, unknown>;
+  try {
+    const triggerResponse = await fetch(`${MATTER_API}/qr_login/trigger/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
 
-  if (!triggerResponse.ok) {
-    return res.status(500).json({ error: "Failed to initiate Matter login" });
+    if (!triggerResponse.ok) {
+      const errorText = await triggerResponse.text();
+      return res.status(500).json({
+        error: "Failed to initiate Matter login",
+        status: triggerResponse.status,
+        details: errorText
+      });
+    }
+
+    triggerData = await triggerResponse.json();
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to connect to Matter API",
+      details: String(error)
+    });
   }
 
-  const { session_token, qr_code_url } = await triggerResponse.json();
+  // Handle both camelCase and snake_case field names
+  const sessionToken = triggerData.session_token || triggerData.sessionToken;
+  const qrCodeUrl = triggerData.qr_code_url || triggerData.qrCodeUrl || triggerData.qr_url || triggerData.qrUrl;
+
+  if (!sessionToken || !qrCodeUrl) {
+    return res.status(500).json({
+      error: "Unexpected response from Matter API",
+      response: triggerData
+    });
+  }
 
   // Return HTML page with QR code that polls for completion
   const html = `<!DOCTYPE html>
@@ -97,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     <h1>Connect to Matter</h1>
     <p>Scan this QR code with the Matter app on your phone</p>
     <div class="qr-container">
-      <img src="${qr_code_url}" alt="QR Code" />
+      <img src="${qrCodeUrl}" alt="QR Code" />
     </div>
     <div class="status" id="status">
       <span class="spinner"></span>
@@ -106,7 +130,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   </div>
 
   <script>
-    const sessionToken = ${JSON.stringify(session_token)};
+    const sessionToken = ${JSON.stringify(sessionToken)};
     const redirectUri = ${JSON.stringify(redirectUri)};
     const state = ${JSON.stringify(state || "")};
 
@@ -123,14 +147,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           if (response.ok) {
             const data = await response.json();
-            if (data.access_token && data.refresh_token) {
+            const accessToken = data.access_token || data.accessToken;
+            const refreshToken = data.refresh_token || data.refreshToken;
+
+            if (accessToken && refreshToken) {
               statusEl.innerHTML = '✓ Connected! Redirecting...';
               statusEl.className = 'status success';
 
               // Encode tokens as the authorization code
               const code = btoa(JSON.stringify({
-                access_token: data.access_token,
-                refresh_token: data.refresh_token
+                access_token: accessToken,
+                refresh_token: refreshToken
               }));
 
               // Redirect back to claude.ai
