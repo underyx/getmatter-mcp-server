@@ -75,6 +75,18 @@ const SaveArticleInputSchema = z.object({
   url: z.string().url(),
 });
 
+// Map library_state number to human-readable status
+function getLibraryStatus(state?: number | null): string {
+  if (state === undefined || state === null) return "Unknown";
+  switch (state) {
+    case 0: return "Queue";
+    case 1: return "Later";
+    case 2: return "Archive";
+    case 3: return "Feed";
+    default: return `Unknown (${state})`;
+  }
+}
+
 export function formatArticle(entry: FeedEntry): string {
   const { content, annotations } = entry;
   const lines: string[] = [];
@@ -86,8 +98,9 @@ export function formatArticle(entry: FeedEntry): string {
     lines.push(`**Author:** ${content.author.any_name}`);
   }
 
-  if (content.publisher?.name) {
-    lines.push(`**Publisher:** ${content.publisher.name}`);
+  const publisherName = content.publisher?.name || content.publisher?.any_name;
+  if (publisherName) {
+    lines.push(`**Publisher:** ${publisherName}`);
   }
 
   if (content.publication_date) {
@@ -95,22 +108,26 @@ export function formatArticle(entry: FeedEntry): string {
   }
 
   lines.push(`**URL:** ${content.url}`);
-  lines.push(`**Status:** ${content.library_state}`);
+  lines.push(`**Status:** ${getLibraryStatus(content.library?.library_state)}`);
 
   if (content.word_count) {
     lines.push(`**Word Count:** ${content.word_count}`);
   }
 
-  lines.push(`**Reading Progress:** ${Math.round(content.reading_progress * 100)}%`);
-
-  if (content.my_tags && content.my_tags.length > 0) {
-    lines.push(`**Tags:** ${content.my_tags.map((t) => t.name).join(", ")}`);
+  if (content.reading_progress !== undefined) {
+    lines.push(`**Reading Progress:** ${Math.round(content.reading_progress * 100)}%`);
   }
 
-  if (content.my_note) {
+  const tags = content.my_tags || content.tags;
+  if (tags && tags.length > 0) {
+    lines.push(`**Tags:** ${tags.map((t) => t.name).join(", ")}`);
+  }
+
+  const note = typeof content.my_note === 'string' ? content.my_note : content.my_note?.note;
+  if (note) {
     lines.push("");
     lines.push("## My Notes");
-    lines.push(content.my_note);
+    lines.push(note);
   }
 
   if (annotations && annotations.length > 0) {
@@ -134,13 +151,16 @@ export function formatArticleList(entries: FeedEntry[]): string {
 
   for (const entry of entries) {
     const { content } = entry;
-    const progress = Math.round(content.reading_progress * 100);
+    const progress = content.reading_progress !== undefined
+      ? Math.round(content.reading_progress * 100)
+      : null;
     const author = content.author?.any_name ? ` by ${content.author.any_name}` : "";
+    const status = getLibraryStatus(content.library?.library_state);
 
     lines.push(`- **${content.title}**${author}`);
-    lines.push(`  ID: ${content.id}`);
+    lines.push(`  ID: ${entry.id}`);
     lines.push(`  URL: ${content.url}`);
-    lines.push(`  Status: ${content.library_state} | Progress: ${progress}%`);
+    lines.push(`  Status: ${status}${progress !== null ? ` | Progress: ${progress}%` : ""}`);
     lines.push("");
   }
 

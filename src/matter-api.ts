@@ -12,26 +12,32 @@ export interface MatterTokens {
   refreshToken: string;
 }
 
+export interface LibraryEntry {
+  library_state: number;
+}
+
 export interface Author {
-  any_name: string;
-  domain: string | null;
-  url: string | null;
-  image_url: string | null;
+  any_name: string | null;
+  domain?: string | null;
+  url?: string | null;
+  image_url?: string | null;
 }
 
 export interface Publisher {
-  name: string;
-  domain: string;
-  url: string | null;
-  favicon_url: string | null;
+  any_name?: string | null;
+  name?: string;
+  domain?: string;
+  url?: string | null;
+  favicon_url?: string | null;
 }
 
 export interface Tag {
   name: string;
+  created_date?: string;
 }
 
 export interface Annotation {
-  id: string;
+  id?: string;
   text: string;
   note: string | null;
   created_date: string;
@@ -39,21 +45,26 @@ export interface Annotation {
   word_end: number;
 }
 
+export interface ContentNote {
+  note: string;
+}
+
 export interface Content {
-  id: string;
+  id?: string;
   url: string;
   title: string;
   author: Author;
   publisher: Publisher;
   publication_date: string | null;
-  my_tags: Tag[];
-  my_annotations: Annotation[];
-  my_note: string | null;
-  library_state: "QUEUE" | "LATER" | "ARCHIVE" | "FEED";
-  created_date: string;
-  reading_progress: number;
-  image_url: string | null;
-  word_count: number | null;
+  library?: LibraryEntry | null;
+  tags?: Tag[];
+  my_tags?: Tag[];
+  my_annotations?: Annotation[];
+  my_note?: ContentNote | string | null;
+  created_date?: string;
+  reading_progress?: number;
+  image_url?: string | null;
+  word_count?: number | null;
 }
 
 export interface FeedEntry {
