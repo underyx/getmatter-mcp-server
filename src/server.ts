@@ -11,7 +11,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { MatterClient, type FeedEntry, type MatterTokens } from "./matter-api.js";
+import { MatterClient, libraryStateToString, type FeedEntry, type MatterTokens } from "./matter-api.js";
 
 // Tool definitions
 export const TOOLS = [
@@ -82,12 +82,16 @@ export function formatArticle(entry: FeedEntry): string {
   lines.push(`# ${content.title}`);
   lines.push("");
 
-  if (content.author?.any_name) {
-    lines.push(`**Author:** ${content.author.any_name}`);
+  // Author - check author.any_name or author.name
+  const authorName = content.author?.any_name || content.author?.name;
+  if (authorName) {
+    lines.push(`**Author:** ${authorName}`);
   }
 
-  if (content.publisher?.name) {
-    lines.push(`**Publisher:** ${content.publisher.name}`);
+  // Publisher - check publisher.any_name or publisher.name
+  const publisherName = content.publisher?.any_name || content.publisher?.name;
+  if (publisherName) {
+    lines.push(`**Publisher:** ${publisherName}`);
   }
 
   if (content.publication_date) {
@@ -95,34 +99,65 @@ export function formatArticle(entry: FeedEntry): string {
   }
 
   lines.push(`**URL:** ${content.url}`);
-  lines.push(`**Status:** ${content.library_state}`);
 
-  if (content.word_count) {
-    lines.push(`**Word Count:** ${content.word_count}`);
+  // Library state is in content.library.library_state
+  if (content.library) {
+    lines.push(`**Status:** ${libraryStateToString(content.library.library_state)}`);
   }
 
-  lines.push(`**Reading Progress:** ${Math.round(content.reading_progress * 100)}%`);
-
-  if (content.my_tags && content.my_tags.length > 0) {
-    lines.push(`**Tags:** ${content.my_tags.map((t) => t.name).join(", ")}`);
+  // Word count and reading time from article
+  if (content.article?.word_count) {
+    lines.push(`**Word Count:** ${content.article.word_count}`);
   }
 
+  if (content.article?.reading_time_minutes) {
+    lines.push(`**Reading Time:** ${content.article.reading_time_minutes} min`);
+  }
+
+  // Reading progress from history
+  const readProgress = content.history?.max_read_percentage ?? content.history?.last_read_percentage;
+  if (readProgress !== null && readProgress !== undefined) {
+    lines.push(`**Reading Progress:** ${Math.round(readProgress * 100)}%`);
+  }
+
+  // Tags
+  if (content.tags && content.tags.length > 0) {
+    lines.push(`**Tags:** ${content.tags.map((t) => t.name).join(", ")}`);
+  }
+
+  // Excerpt
+  if (content.excerpt) {
+    lines.push("");
+    lines.push("## Excerpt");
+    lines.push(content.excerpt);
+  }
+
+  // My note
   if (content.my_note) {
     lines.push("");
     lines.push("## My Notes");
     lines.push(content.my_note);
   }
 
-  if (annotations && annotations.length > 0) {
+  // Highlights/annotations - check both entry.annotations and content.my_annotations
+  const allAnnotations = [...(annotations || []), ...(content.my_annotations || [])];
+  if (allAnnotations.length > 0) {
     lines.push("");
     lines.push("## Highlights");
-    for (const annotation of annotations) {
+    for (const annotation of allAnnotations) {
       lines.push("");
       lines.push(`> ${annotation.text}`);
       if (annotation.note) {
         lines.push(`  *Note: ${annotation.note}*`);
       }
     }
+  }
+
+  // Full article content if available
+  if (content.article?.markdown) {
+    lines.push("");
+    lines.push("## Full Article");
+    lines.push(content.article.markdown);
   }
 
   return lines.join("\n");
@@ -134,13 +169,22 @@ export function formatArticleList(entries: FeedEntry[]): string {
 
   for (const entry of entries) {
     const { content } = entry;
-    const progress = Math.round(content.reading_progress * 100);
-    const author = content.author?.any_name ? ` by ${content.author.any_name}` : "";
+
+    // Get reading progress from history
+    const readProgress = content.history?.max_read_percentage ?? content.history?.last_read_percentage ?? 0;
+    const progress = Math.round(readProgress * 100);
+
+    // Get author name
+    const authorName = content.author?.any_name || content.author?.name;
+    const author = authorName ? ` by ${authorName}` : "";
+
+    // Get library state
+    const status = content.library ? libraryStateToString(content.library.library_state) : "UNKNOWN";
 
     lines.push(`- **${content.title}**${author}`);
     lines.push(`  ID: ${content.id}`);
     lines.push(`  URL: ${content.url}`);
-    lines.push(`  Status: ${content.library_state} | Progress: ${progress}%`);
+    lines.push(`  Status: ${status} | Progress: ${progress}%`);
     lines.push("");
   }
 
