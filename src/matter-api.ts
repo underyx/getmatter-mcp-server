@@ -248,7 +248,7 @@ export class MatterClient {
   async getArticle(articleId: string): Promise<FeedEntry | null> {
     // The API doesn't have a direct endpoint for single articles,
     // so we need to paginate through the feed to find it
-    let currentUrl: string | null = "/library_items/highlights_feed/";
+    let currentUrl: string | null = "/library_items/queue_feed/";
 
     while (currentUrl) {
       const feedResponse: FeedResponse = await this.request<FeedResponse>(currentUrl);
