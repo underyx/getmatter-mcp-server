@@ -219,8 +219,8 @@ export class MatterClient {
     nextUrl?: string;
   }): Promise<{ articles: FeedEntry[]; nextUrl: string | null }> {
     const allArticles: FeedEntry[] = [];
-    // Try the generic feed endpoint
-    let currentUrl: string | null = options?.nextUrl || "/library_items/feed/";
+    // Use the queue feed which should return all saved articles
+    let currentUrl: string | null = options?.nextUrl || "/library_items/queue_feed/";
     const limit = options?.limit || 100;
 
     while (currentUrl && allArticles.length < limit) {
@@ -248,7 +248,7 @@ export class MatterClient {
   async getArticle(articleId: string): Promise<FeedEntry | null> {
     // The API doesn't have a direct endpoint for single articles,
     // so we need to paginate through the feed to find it
-    let currentUrl: string | null = "/library_items/feed/";
+    let currentUrl: string | null = "/library_items/queue_feed/";
 
     while (currentUrl) {
       const feedResponse: FeedResponse = await this.request<FeedResponse>(currentUrl);
