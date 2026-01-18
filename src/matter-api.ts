@@ -366,20 +366,32 @@ export class MatterClient {
 
   /**
    * Save a new article to Matter queue
-   * Uses the web.getmatter.com/api/save endpoint
+   * Uses the web.getmatter.com/api/save endpoint with cookie-based auth
    */
   async saveArticle(url: string): Promise<SaveArticleResponse> {
-    const response = await this.request<SaveArticleResponse>(
-      "https://web.getmatter.com/api/save",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          url,
-          user_agent: "Matter MCP Server/1.0",
-        }),
-      }
-    );
-    return response;
+    // The web.getmatter.com endpoint requires cookie-based auth, not Bearer token
+    const response = await fetch("https://web.getmatter.com/api/save", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cookie": `access_token=${this.accessToken}; refresh_token=${this.refreshToken}`,
+      },
+      body: JSON.stringify({
+        url,
+        user_agent: "Matter MCP Server/1.0",
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new MatterAPIError(
+        `Failed to save article: ${response.statusText}`,
+        response.status,
+        errorText
+      );
+    }
+
+    return response.json() as Promise<SaveArticleResponse>;
   }
 
   /**
