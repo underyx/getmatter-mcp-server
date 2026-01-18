@@ -23,6 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const triggerResponse = await fetch(`${MATTER_API}/qr_login/trigger/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_type: "integration" }),
     });
 
     if (!triggerResponse.ok) {
