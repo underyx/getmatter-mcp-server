@@ -42,16 +42,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  // Handle both camelCase and snake_case field names
+  // Get session token from response
   const sessionToken = triggerData.session_token || triggerData.sessionToken;
-  const qrCodeUrl = triggerData.qr_code_url || triggerData.qrCodeUrl || triggerData.qr_url || triggerData.qrUrl;
 
-  if (!sessionToken || !qrCodeUrl) {
+  if (!sessionToken) {
     return res.status(500).json({
-      error: "Unexpected response from Matter API",
+      error: "Unexpected response from Matter API - no session token",
       response: triggerData
     });
   }
+
+  // Generate QR code URL - the QR code contains just the session token
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(String(sessionToken))}`;
 
   // Return HTML page with QR code that polls for completion
   const html = `<!DOCTYPE html>
