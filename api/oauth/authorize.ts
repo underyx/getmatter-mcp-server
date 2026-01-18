@@ -139,7 +139,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       for (let i = 0; i < 120; i++) { // Poll for up to 2 minutes
         try {
-          const response = await fetch('${MATTER_API}/qr_login/exchange/', {
+          const response = await fetch('/api/oauth/exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_token: sessionToken })
