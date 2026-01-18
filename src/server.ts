@@ -263,7 +263,7 @@ export function createMatterServer(tokens: MatterTokens): Server {
             content: [
               {
                 type: "text",
-                text: `Article saved successfully!\nURL: ${input.url}\nID: ${result.id || "assigned"}`,
+                text: `Article saved successfully!\nURL: ${input.url}\nContent ID: ${result.content_id}\nEntry ID: ${result.id}`,
               },
             ],
           };
