@@ -164,9 +164,8 @@ export interface TokenRefreshResponse {
 }
 
 export interface SaveArticleResponse {
-  id: string;
-  content_url: string;
-  status: string;
+  id: number;
+  content_id: number;
 }
 
 class MatterAPIError extends Error {
@@ -367,14 +366,17 @@ export class MatterClient {
 
   /**
    * Save a new article to Matter queue
-   * Note: This endpoint is based on reverse-engineering and may change
+   * Uses the web.getmatter.com/api/save endpoint
    */
   async saveArticle(url: string): Promise<SaveArticleResponse> {
     const response = await this.request<SaveArticleResponse>(
-      "/library_items/queue_entries/",
+      "https://web.getmatter.com/api/save",
       {
         method: "POST",
-        body: JSON.stringify({ content_url: url }),
+        body: JSON.stringify({
+          url,
+          user_agent: "Matter MCP Server/1.0",
+        }),
       }
     );
     return response;
