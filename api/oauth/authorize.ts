@@ -1,62 +1,50 @@
 /**
  * OAuth Authorization Endpoint
  *
- * Displays a QR code for the user to scan with the Matter app.
- * After scanning, redirects back to claude.ai with the tokens.
+ * Displays a QR code for the user to scan with the Matter app, polls /exchange
+ * until Matter hands back tokens, then redirects to the client with those
+ * tokens encoded as the authorization code.
  */
 
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { MatterAPIError, MatterClient } from "../../src/matter-api.js";
+import { jsonResponse, methodNotAllowed } from "../../src/http.js";
 
-const MATTER_API = "https://api.getmatter.app/api/v11";
+/** JSON.stringify that is safe to inline inside a <script> element. */
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const redirectUri = req.query.redirect_uri as string;
-  const state = req.query.state as string;
+async function handler(request: Request): Promise<Response> {
+  if (request.method !== "GET") return methodNotAllowed("GET");
+
+  const query = new URL(request.url).searchParams;
+  const redirectUri = query.get("redirect_uri");
+  const state = query.get("state") ?? "";
 
   if (!redirectUri) {
-    return res.status(400).json({ error: "Missing redirect_uri" });
+    return jsonResponse({ error: "Missing redirect_uri" }, 400);
   }
 
-  // Trigger QR login to get session token
-  let triggerData: Record<string, unknown>;
+  let sessionToken: string;
   try {
-    const triggerResponse = await fetch(`${MATTER_API}/qr_login/trigger/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ client_type: "integration" }),
-    });
-
-    if (!triggerResponse.ok) {
-      const errorText = await triggerResponse.text();
-      return res.status(500).json({
-        error: "Failed to initiate Matter login",
-        status: triggerResponse.status,
-        details: errorText
-      });
+    const trigger = await MatterClient.triggerQRLogin();
+    if (!trigger.session_token) {
+      return jsonResponse(
+        { error: "Unexpected response from Matter API - no session token", response: trigger },
+        500,
+      );
     }
-
-    triggerData = await triggerResponse.json();
+    sessionToken = trigger.session_token;
   } catch (error) {
-    return res.status(500).json({
-      error: "Failed to connect to Matter API",
-      details: String(error)
-    });
+    if (error instanceof MatterAPIError) {
+      return jsonResponse({ error: "Failed to initiate Matter login", status: error.status }, 500);
+    }
+    return jsonResponse({ error: "Failed to connect to Matter API", details: String(error) }, 500);
   }
 
-  // Get session token from response
-  const sessionToken = triggerData.session_token || triggerData.sessionToken;
+  // The QR code contains just the session token.
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(sessionToken)}`;
 
-  if (!sessionToken) {
-    return res.status(500).json({
-      error: "Unexpected response from Matter API - no session token",
-      response: triggerData
-    });
-  }
-
-  // Generate QR code URL - the QR code contains just the session token
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(String(sessionToken))}`;
-
-  // Return HTML page with QR code that polls for completion
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,16 +121,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   </div>
 
   <script>
-    const sessionToken = ${JSON.stringify(sessionToken)};
-    const redirectUri = ${JSON.stringify(redirectUri)};
-    const state = ${JSON.stringify(state || "")};
+    const sessionToken = ${scriptJson(sessionToken)};
+    const redirectUri = ${scriptJson(redirectUri)};
+    const state = ${scriptJson(state)};
 
     async function pollForTokens() {
       const statusEl = document.getElementById('status');
 
       for (let i = 0; i < 120; i++) { // Poll for up to 2 minutes
         try {
-          const response = await fetch('/api/oauth/exchange', {
+          const response = await fetch('/exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_token: sessionToken })
@@ -163,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 refresh_token: refreshToken
               }));
 
-              // Redirect back to claude.ai
+              // Redirect back to the client
               const url = new URL(redirectUri);
               url.searchParams.set('code', code);
               if (state) url.searchParams.set('state', state);
@@ -188,6 +176,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 </body>
 </html>`;
 
-  res.setHeader("Content-Type", "text/html");
-  return res.status(200).send(html);
+  return new Response(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+  });
 }
+
+export { handler as GET };

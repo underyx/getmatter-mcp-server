@@ -1,0 +1,61 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test deployed endpoints
+        env:
+          DEPLOY_URL: https://getmatter-mcp-server.underyx.workers.dev
+        run: |
+          set -e
+          # A fresh deployment takes a moment before every route serves at the edge.
+          for _ in $(seq 1 20); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOY_URL/")" = "200" ] && break
+            sleep 3
+          done
+          # OAuth authorization-server metadata is served and well-formed.
+          metadata=$(curl -sf "$DEPLOY_URL/.well-known/oauth-authorization-server")
+          echo "$metadata"
+          echo "$metadata" | grep -q "\"authorization_endpoint\":\"$DEPLOY_URL/authorize\""
+          # Unauthenticated /mcp answers 401 with the metadata pointer that starts the login flow.
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$DEPLOY_URL/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+          echo "unauthenticated /mcp -> $status"
+          [ "$status" = "401" ]
+          # A real tool call reaches api.getmatter.com. The bogus token means the
+          # only correct outcome is Matter's own auth failure — anything else means
+          # the request never left the worker. This is the only check that
+          # exercises outbound fetch in workerd, where Node-only runtime errors surface.
+          token=$(printf '{"accessToken":"bogus","refreshToken":"bogus"}' | base64 -w0)
+          called=$(curl -sf -X POST "$DEPLOY_URL/mcp" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"matter_list_articles","arguments":{"limit":1}}}')
+          echo "$called"
+          echo "$called" | grep -q 'Authentication failed'
+          ! echo "$called" | grep -qi 'Illegal invocation'

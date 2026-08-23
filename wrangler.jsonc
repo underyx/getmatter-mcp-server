@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "getmatter-mcp-server",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // No bindings: the server is stateless. The Matter tokens obtained by the QR
+  // login are handed back to the client inside the OAuth access token, so the
+  // Worker holds nothing between requests and needs no secrets either.
+  "observability": {
+    "enabled": true
+  }
+}

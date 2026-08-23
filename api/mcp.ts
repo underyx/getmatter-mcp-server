@@ -1,39 +1,41 @@
 /**
- * Matter MCP Server - Vercel API Route
+ * MCP endpoint: stateless streamable HTTP.
  *
- * This API route handles MCP communication over Streamable HTTP for use with claude.ai.
- * Tokens are passed via Bearer token from OAuth flow.
+ * Matter credentials arrive either as the OAuth access token this server
+ * issued (claude.ai connector flow) or as a pair of custom headers (manual
+ * configuration). They are only ever forwarded to Matter's API.
  */
 
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createMatterServer } from "../dist/server.js";
-import type { MatterTokens } from "../dist/matter-api.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createMatterServer } from "../src/server.js";
+import type { MatterTokens } from "../src/matter-api.js";
+import { decodeTokens, publicOrigin } from "../src/http.js";
 
-function getTokensFromRequest(req: VercelRequest): MatterTokens | null {
-  const authHeader = req.headers.authorization;
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Authorization, Content-Type, X-Matter-Access-Token, X-Matter-Refresh-Token, Mcp-Session-Id, Mcp-Protocol-Version",
+  "Access-Control-Expose-Headers": "Mcp-Session-Id, WWW-Authenticate",
+};
 
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function getTokensFromRequest(request: Request): MatterTokens | null {
+  const authHeader = request.headers.get("authorization");
   if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.slice(7);
-
-    // Try to decode as our combined token format (base64 JSON)
-    try {
-      const decoded = JSON.parse(Buffer.from(token, "base64").toString("utf-8"));
-      if (decoded.accessToken && decoded.refreshToken) {
-        return {
-          accessToken: decoded.accessToken,
-          refreshToken: decoded.refreshToken,
-        };
-      }
-    } catch {
-      // Not our format, fall through
-    }
+    const tokens = decodeTokens(authHeader.slice(7).trim());
+    if (tokens) return tokens;
   }
 
-  // Fallback: Try custom headers (for manual configuration)
-  const accessToken = req.headers["x-matter-access-token"] as string | undefined;
-  const refreshToken = req.headers["x-matter-refresh-token"] as string | undefined;
-
+  const accessToken = request.headers.get("x-matter-access-token");
+  const refreshToken = request.headers.get("x-matter-refresh-token");
   if (accessToken && refreshToken) {
     return { accessToken, refreshToken };
   }
@@ -41,50 +43,49 @@ function getTokensFromRequest(req: VercelRequest): MatterTokens | null {
   return null;
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Matter-Access-Token, X-Matter-Refresh-Token, Mcp-Session-Id"
-    );
-    return res.status(204).end();
+/** 401 with the metadata pointer that makes MCP clients start the OAuth login flow (RFC 9728). */
+function unauthorized(request: Request): Response {
+  const resourceMetadata = `${publicOrigin(request)}/.well-known/oauth-protected-resource`;
+  return new Response(
+    JSON.stringify({
+      error: "invalid_token",
+      error_description: "Please connect your Matter account using the Connect button",
+    }),
+    {
+      status: 401,
+      headers: {
+        ...CORS_HEADERS,
+        "Content-Type": "application/json",
+        "WWW-Authenticate": `Bearer resource_metadata="${resourceMetadata}", error="invalid_token"`,
+      },
+    },
+  );
+}
+
+async function handler(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // Set CORS headers for all responses
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  const tokens = getTokensFromRequest(req);
-
-  if (!tokens) {
-    // Get base URL for the resource_metadata link
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers["x-forwarded-host"] || req.headers.host;
-    const baseUrl = `${protocol}://${host}`;
-
-    // Return 401 with WWW-Authenticate header pointing to OAuth metadata (RFC 9728)
-    res.setHeader(
-      "WWW-Authenticate",
-      `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
-    );
-    res.setHeader("Access-Control-Expose-Headers", "WWW-Authenticate");
-    return res.status(401).json({
-      error: "Unauthorized",
-      message: "Please connect your Matter account using the Connect button",
-    });
+  // Stateless server: there is no SSE event stream to resume and no session to
+  // delete, so anything but POST gets a 405 (clients treat that as "no SSE offered").
+  if (request.method !== "POST") {
+    return new Response(null, { status: 405, headers: { ...CORS_HEADERS, Allow: "POST, OPTIONS" } });
   }
 
-  // Create server and transport for this request
+  const tokens = getTokensFromRequest(request);
+  if (!tokens) return unauthorized(request);
+
+  // Stateless mode: a fresh server + transport per request.
   const server = createMatterServer(tokens);
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // Stateless mode
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
   });
-
-  // Connect server to transport
   await server.connect(transport);
 
-  // Handle the request
-  await transport.handleRequest(req, res, req.body);
+  const response = await transport.handleRequest(request);
+  return withCors(response);
 }
+
+export { handler as GET, handler as POST, handler as DELETE, handler as OPTIONS };

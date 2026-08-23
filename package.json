@@ -8,10 +8,11 @@
     "getmatter-mcp-server": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
-    "dev": "tsc --watch",
-    "vercel-build": "tsc"
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "keywords": [
     "mcp",
@@ -23,13 +24,13 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@vercel/node": "^5.0.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "wrangler": "^4.118.0"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -1,71 +1,40 @@
 /**
  * OAuth Token Endpoint
  *
- * Exchanges the authorization code for access tokens.
- * The code contains the Matter tokens encoded as base64 JSON.
+ * Exchanges the authorization code for an access token. The code is the pair
+ * of Matter tokens as base64 JSON (built by the /authorize page), and the
+ * access token is the same pair re-encoded, so nothing is stored server-side.
  */
 
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { corsPreflight, decodeTokens, encodeTokens, jsonResponse, methodNotAllowed, readParams } from "../../src/http.js";
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Handle CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+async function handler(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") return corsPreflight();
+  if (request.method !== "POST") return methodNotAllowed("POST, OPTIONS");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  // Parse request body (could be JSON or form-urlencoded)
-  let code: string | undefined;
-  let grantType: string | undefined;
-
-  if (typeof req.body === "string") {
-    const params = new URLSearchParams(req.body);
-    code = params.get("code") || undefined;
-    grantType = params.get("grant_type") || undefined;
-  } else if (req.body) {
-    code = req.body.code;
-    grantType = req.body.grant_type;
-  }
-
+  const params = await readParams(request);
+  const code = params.code;
   if (!code) {
-    return res.status(400).json({
-      error: "invalid_request",
-      error_description: "Missing code parameter",
-    });
+    return jsonResponse(
+      { error: "invalid_request", error_description: "Missing code parameter" },
+      400,
+    );
   }
 
-  try {
-    // Decode the authorization code (base64 JSON with tokens)
-    const decoded = JSON.parse(Buffer.from(code, "base64").toString("utf-8"));
-    const { access_token, refresh_token } = decoded;
-
-    if (!access_token || !refresh_token) {
-      throw new Error("Invalid token structure");
-    }
-
-    // Return tokens in OAuth format
-    // We encode both tokens into the access_token so the MCP endpoint can use them
-    const combinedToken = Buffer.from(
-      JSON.stringify({ accessToken: access_token, refreshToken: refresh_token })
-    ).toString("base64");
-
-    return res.status(200).json({
-      access_token: combinedToken,
-      token_type: "Bearer",
-      // Include refresh_token for completeness
-      refresh_token: refresh_token,
-    });
-  } catch (error) {
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "Invalid or expired authorization code",
-    });
+  const tokens = decodeTokens(code);
+  if (!tokens) {
+    return jsonResponse(
+      { error: "invalid_grant", error_description: "Invalid or expired authorization code" },
+      400,
+    );
   }
+
+  return jsonResponse({
+    access_token: encodeTokens(tokens),
+    token_type: "Bearer",
+    // Included for completeness; the MCP endpoint refreshes through Matter itself.
+    refresh_token: tokens.refreshToken,
+  });
 }
+
+export { handler as POST, handler as OPTIONS };

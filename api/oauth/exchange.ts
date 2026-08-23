@@ -1,45 +1,37 @@
 /**
  * QR Login Exchange Proxy
  *
- * Proxies the QR login exchange request to Matter API to avoid CORS issues.
+ * The /authorize page polls this with the QR session token until the user has
+ * scanned the code. It proxies Matter's exchange endpoint so the browser never
+ * has to talk to Matter cross-origin. While the login is pending Matter answers
+ * 200 with null tokens, which the page treats as "keep waiting".
  */
 
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { MatterAPIError, MatterClient } from "../../src/matter-api.js";
+import { corsPreflight, jsonResponse, methodNotAllowed } from "../../src/http.js";
 
-const MATTER_API = "https://api.getmatter.app/api/v11";
+async function handler(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") return corsPreflight();
+  if (request.method !== "POST") return methodNotAllowed("POST, OPTIONS");
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
+  let sessionToken: unknown;
+  try {
+    sessionToken = ((await request.json()) as { session_token?: unknown }).session_token;
+  } catch {
+    // handled below
   }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const { session_token } = req.body || {};
-
-  if (!session_token) {
-    return res.status(400).json({ error: "Missing session_token" });
+  if (typeof sessionToken !== "string" || !sessionToken) {
+    return jsonResponse({ error: "Missing session_token" }, 400);
   }
 
   try {
-    const response = await fetch(`${MATTER_API}/qr_login/exchange/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_token }),
-    });
-
-    const data = await response.json();
-    return res.status(response.status).json(data);
+    return jsonResponse(await MatterClient.exchangeQRToken(sessionToken));
   } catch (error) {
-    return res.status(500).json({
-      error: "Failed to exchange token",
-      details: String(error),
-    });
+    if (error instanceof MatterAPIError) {
+      return jsonResponse({ error: error.message }, error.status);
+    }
+    return jsonResponse({ error: "Failed to exchange token", details: String(error) }, 500);
   }
 }
+
+export { handler as POST, handler as OPTIONS };

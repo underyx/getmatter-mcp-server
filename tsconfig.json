@@ -3,16 +3,18 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "lib": ["ES2022"],
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "api/**/*", "worker/**/*"],
   "exclude": ["node_modules", "dist"]
 }

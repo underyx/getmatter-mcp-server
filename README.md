@@ -8,47 +8,44 @@ An MCP (Model Context Protocol) server for [Matter](https://getmatter.com), the 
 - **Get Article Details**: Retrieve full article information including highlights and annotations
 - **Save Articles**: Add new URLs to your Matter queue
 
-## Installation
+## Usage with claude.ai (remote)
+
+The remote server runs on Cloudflare Workers at `https://getmatter-mcp-server.underyx.workers.dev/mcp` and signs you in with the same QR code the Matter app uses for its other integrations — click **Connect** and scan.
+
+1. Go to [claude.ai](https://claude.ai) Settings → Connectors → **Add custom connector**
+2. URL: `https://getmatter-mcp-server.underyx.workers.dev/mcp`
+3. Click **Connect**
+4. Scan the QR code with the Matter app on your phone
+5. Done! Your Matter account is now connected
+
+The server is its own small OAuth 2.1 authorization server (dynamic client registration, metadata discovery), which is what claude.ai's connector flow requires. It is stateless: the Matter tokens obtained by the QR scan are handed back to claude.ai inside the OAuth access token and are never stored on the server — they are only ever forwarded to Matter's API.
+
+Claude Code connects the same way:
+
+```bash
+claude mcp add --transport http matter https://getmatter-mcp-server.underyx.workers.dev/mcp
+```
+
+Clients that can send static headers can skip OAuth and pass the tokens directly as `X-Matter-Access-Token` and `X-Matter-Refresh-Token` (see below for how to obtain them).
+
+## Deploy your own
 
 ```bash
 npm install
-npm run build
+npx wrangler login
+npx wrangler deploy
 ```
 
-## Usage with claude.ai (Vercel Deployment)
+There are no secrets, databases or KV namespaces to provision. The included GitHub Actions workflow (`.github/workflows/deploy.yml`) deploys on every push to `main` and smoke-tests the result; it needs two repository secrets:
 
-Deploy to Vercel for use with claude.ai as a remote MCP server. Uses OAuth-style QR code authentication - just click Connect and scan!
-
-### 1. Deploy to Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/underyx/getmatter-mcp-server)
-
-Or deploy manually:
-
-```bash
-npm install -g vercel
-vercel
-```
-
-No environment variables needed - the server is stateless.
-
-### 2. Add to claude.ai
-
-1. Go to [claude.ai](https://claude.ai) Settings
-2. Navigate to **MCP Servers** (or Integrations)
-3. Add a new remote MCP server:
-   - **URL**: `https://your-project.vercel.app/api/mcp`
-   - **Authorization URL**: `https://your-project.vercel.app/api/oauth/authorize`
-   - **Token URL**: `https://your-project.vercel.app/api/oauth/token`
-4. Click **Connect**
-5. Scan the QR code with the Matter app on your phone
-6. Done! Your Matter account is now connected
-
-Your tokens are obtained via QR code scan and stored securely by claude.ai.
+| Secret | Where it comes from |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | An API token using the *Edit Cloudflare Workers* template |
+| `CLOUDFLARE_ACCOUNT_ID` | `npx wrangler whoami`, or the Cloudflare dashboard URL |
 
 ## Usage with Claude Desktop (Local)
 
-For local use, you'll need to obtain tokens manually via the Obsidian plugin.
+For local use, run `npm install && npm run build` and obtain tokens manually via the Obsidian plugin.
 
 ### Getting Your Matter API Tokens
 
@@ -119,18 +116,13 @@ Save https://example.com/interesting-article to Matter
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
-npm run build
-
-# Watch mode
-npm run dev
-
-# Run the server
-npm start
+npm run typecheck
+npx wrangler dev    # serve the remote server locally at http://localhost:8787/mcp
+npm run build       # compile the stdio entry point to dist/
 ```
+
+The server is plain TypeScript on the official MCP SDK: `src/server.ts` defines the tools, `src/matter-api.ts` is the Matter API client, `src/index.ts` is the stdio entry point, and `api/mcp.ts` plus `api/oauth/*` serve the remote endpoints. Those handlers are all plain `Request` -> `Response` functions; `worker/index.ts` is only the routing table that maps paths onto them.
 
 ## API Notes
 

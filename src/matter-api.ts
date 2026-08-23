@@ -168,7 +168,7 @@ export interface SaveArticleResponse {
   content_id: number;
 }
 
-class MatterAPIError extends Error {
+export class MatterAPIError extends Error {
   constructor(
     message: string,
     public status: number,
