@@ -10,22 +10,38 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { MatterClient, libraryStateToString, type FeedEntry, type MatterTokens } from "./matter-api.js";
+
+/** Full article bodies run to 70 KB+; past this the response gets cut off by MCP hosts anyway. */
+const MAX_CONTENT_CHARS = 40_000;
 
 // Tool definitions
 export const TOOLS = [
   {
     name: "matter_list_articles",
     description:
-      "List articles from your Matter reading list. Returns a paginated list of saved articles with their titles, URLs, authors, and reading progress.",
+      "List articles from your Matter library, most recently changed first, with their IDs, titles, URLs, authors, status (QUEUE or ARCHIVE) and reading progress. Deleted articles are never listed. Page with offset; the footer says whether more follow.",
     inputSchema: {
       type: "object" as const,
       properties: {
         limit: {
-          type: "number",
+          type: "integer",
           description: "Maximum number of articles to return (default: 20, max: 100)",
           default: 20,
+          minimum: 1,
+          maximum: 100,
+        },
+        offset: {
+          type: "integer",
+          description: "Number of articles to skip, for paging (default: 0)",
+          default: 0,
+          minimum: 0,
+        },
+        status: {
+          type: "string",
+          enum: ["queue", "archive"],
+          description: "Only articles in the reading queue, or only archived ones. Omit for both.",
         },
       },
     },
@@ -33,13 +49,18 @@ export const TOOLS = [
   {
     name: "matter_get_article",
     description:
-      "Get detailed information about a specific article including its full content, highlights, annotations, and notes.",
+      "Get detailed information about a specific article (by the ID shown in matter_list_articles): metadata, excerpt, your highlights and notes, and the full text. Long articles are cut at 40,000 characters; set include_content to false for just the metadata and highlights.",
     inputSchema: {
       type: "object" as const,
       properties: {
         article_id: {
           type: "string",
-          description: "The ID of the article to retrieve",
+          description: "The ID of the article to retrieve, as shown by matter_list_articles",
+        },
+        include_content: {
+          type: "boolean",
+          description: "Include the full article text (default: true)",
+          default: true,
         },
       },
       required: ["article_id"],
@@ -62,21 +83,38 @@ export const TOOLS = [
   },
 ];
 
-// Input validation schemas
+// Input validation schemas. Some clients send every argument as a string, so
+// numbers and booleans are coerced from their obvious spellings.
+const looseBoolean = z.preprocess(
+  (value) => (value === "true" ? true : value === "false" ? false : value),
+  z.boolean(),
+);
+
 const ListArticlesInputSchema = z.object({
-  limit: z.number().min(1).max(100).optional().default(20),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  status: z.enum(["queue", "archive"]).optional(),
 });
 
 const GetArticleInputSchema = z.object({
-  article_id: z.string().min(1),
+  article_id: z.string().trim().min(1),
+  include_content: looseBoolean.optional().default(true),
 });
+
+/** "limit: Number must be less than or equal to 100" rather than a dumped issue array. */
+function describeZodError(error: ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length ? issue.path.join(".") : "input"}: ${issue.message}`)
+    .join("; ");
+}
 
 const SaveArticleInputSchema = z.object({
   url: z.string().url(),
 });
 
-export function formatArticle(entry: FeedEntry): string {
+export function formatArticle(entry: FeedEntry, options: { includeContent?: boolean } = {}): string {
   const { content, annotations } = entry;
+  const includeContent = options.includeContent ?? true;
   const lines: string[] = [];
 
   lines.push(`# ${content.title}`);
@@ -114,11 +152,9 @@ export function formatArticle(entry: FeedEntry): string {
     lines.push(`**Reading Time:** ${content.article.reading_time_minutes} min`);
   }
 
-  // Reading progress from history
-  const readProgress = content.history?.max_read_percentage ?? content.history?.last_read_percentage;
-  if (readProgress !== null && readProgress !== undefined) {
-    lines.push(`**Reading Progress:** ${Math.round(readProgress * 100)}%`);
-  }
+  // Reading progress from history; an article never opened has no history, which is 0%.
+  const readProgress = content.history?.max_read_percentage ?? content.history?.last_read_percentage ?? 0;
+  lines.push(`**Reading Progress:** ${Math.round(readProgress * 100)}%`);
 
   // Tags
   if (content.tags && content.tags.length > 0) {
@@ -154,18 +190,34 @@ export function formatArticle(entry: FeedEntry): string {
   }
 
   // Full article content if available
-  if (content.article?.markdown) {
+  if (includeContent && content.article?.markdown) {
     lines.push("");
     lines.push("## Full Article");
-    lines.push(content.article.markdown);
+    const markdown = content.article.markdown;
+    if (markdown.length > MAX_CONTENT_CHARS) {
+      lines.push(markdown.slice(0, MAX_CONTENT_CHARS));
+      lines.push("");
+      lines.push(
+        `*[Article text cut here: ${markdown.length - MAX_CONTENT_CHARS} more characters. Read the rest at ${content.url}]*`,
+      );
+    } else {
+      lines.push(markdown);
+    }
   }
 
   return lines.join("\n");
 }
 
-export function formatArticleList(entries: FeedEntry[]): string {
+export function formatArticleList(
+  entries: FeedEntry[],
+  paging: { offset: number; hasMore: boolean } = { offset: 0, hasMore: false },
+): string {
   const lines: string[] = [];
-  lines.push(`Found ${entries.length} articles:\n`);
+  const range =
+    entries.length === 0
+      ? "No articles"
+      : `Articles ${paging.offset + 1}-${paging.offset + entries.length}${paging.hasMore ? "" : " (end of list)"}`;
+  lines.push(`${range}:\n`);
 
   for (const entry of entries) {
     const { content } = entry;
@@ -186,6 +238,10 @@ export function formatArticleList(entries: FeedEntry[]): string {
     lines.push(`  URL: ${content.url}`);
     lines.push(`  Status: ${status} | Progress: ${progress}%`);
     lines.push("");
+  }
+
+  if (paging.hasMore) {
+    lines.push(`More articles follow; call again with offset ${paging.offset + entries.length}.`);
   }
 
   return lines.join("\n");
@@ -219,12 +275,16 @@ export function createMatterServer(tokens: MatterTokens): Server {
       switch (name) {
         case "matter_list_articles": {
           const input = ListArticlesInputSchema.parse(args);
-          const { articles } = await client.getArticles({ limit: input.limit });
+          const { articles, hasMore } = await client.getArticles({
+            limit: input.limit,
+            offset: input.offset,
+            status: input.status,
+          });
           return {
             content: [
               {
                 type: "text",
-                text: formatArticleList(articles),
+                text: formatArticleList(articles, { offset: input.offset, hasMore }),
               },
             ],
           };
@@ -250,7 +310,7 @@ export function createMatterServer(tokens: MatterTokens): Server {
             content: [
               {
                 type: "text",
-                text: formatArticle(article),
+                text: formatArticle(article, { includeContent: input.include_content }),
               },
             ],
           };
@@ -259,13 +319,12 @@ export function createMatterServer(tokens: MatterTokens): Server {
         case "matter_save_article": {
           const input = SaveArticleInputSchema.parse(args);
           const result = await client.saveArticle(input.url);
+          const lines = [`Article saved to your Matter queue.`, `URL: ${input.url}`];
+          if (result.title) lines.push(`Title: ${result.title}`);
+          const contentId = result.content_id ?? (result.content as { id?: unknown } | undefined)?.id ?? result.id;
+          if (contentId !== undefined) lines.push(`Content ID: ${contentId}`);
           return {
-            content: [
-              {
-                type: "text",
-                text: `Article saved successfully!\nURL: ${input.url}\nContent ID: ${result.content_id}\nEntry ID: ${result.id}`,
-              },
-            ],
+            content: [{ type: "text", text: lines.join("\n") }],
           };
         }
 
@@ -281,7 +340,12 @@ export function createMatterServer(tokens: MatterTokens): Server {
           };
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof ZodError
+          ? `Invalid arguments — ${describeZodError(error)}`
+          : error instanceof Error
+            ? error.message
+            : String(error);
       return {
         content: [
           {

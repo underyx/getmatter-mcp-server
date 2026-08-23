@@ -79,10 +79,12 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
 ### matter_list_articles
 
-List articles from your Matter reading list.
+List articles from your Matter library, most recently changed first. Deleted articles are never listed.
 
 **Parameters:**
 - `limit` (optional): Maximum number of articles to return (default: 20, max: 100)
+- `offset` (optional): Articles to skip, for paging (default: 0)
+- `status` (optional): `queue` or `archive` to list only one of them
 
 **Example:**
 ```
@@ -91,10 +93,11 @@ List my Matter articles
 
 ### matter_get_article
 
-Get detailed information about a specific article.
+Get detailed information about a specific article: metadata, excerpt, highlights, notes and the full text (cut at 40,000 characters).
 
 **Parameters:**
-- `article_id` (required): The ID of the article to retrieve
+- `article_id` (required): The ID shown by `matter_list_articles`
+- `include_content` (optional): Set to `false` for metadata and highlights only (default: true)
 
 **Example:**
 ```
@@ -126,11 +129,18 @@ The server is plain TypeScript on the official MCP SDK: `src/server.ts` defines 
 
 ## API Notes
 
-This server uses Matter's internal API (v11), which was reverse-engineered from the [official Obsidian plugin](https://github.com/getmatterapp/obsidian-matter). The API is not officially documented and may change. Key endpoints:
+This server uses Matter's internal API (`api.getmatter.com/api/v20`), reverse-engineered from the [official Obsidian plugin](https://github.com/getmatterapp/obsidian-matter) and the web app. It is not officially documented and may change. Key endpoints:
 
-- `GET /library_items/highlights_feed/` - List articles with highlights
-- `POST /library_items/queue_entries/` - Save new articles
+- `GET /library_items/updates_feed/` - Every library entry, most recently changed first (paged)
+- `POST /save/` - Save a URL to the queue (the web app's own save call)
 - `POST /token/refresh/` - Refresh access token
+- `POST /qr_login/trigger/` and `/qr_login/exchange/` - QR sign-in
+
+Things learned the hard way:
+
+- `library_state` is `0` unsaved (feed item), `1` queue, `2` archive, `3` deleted — taken from the web app's constants. Deleted entries never leave the feed, so the list tool drops them.
+- Tokens from a QR login with `client_type: "integration"` are read-only (`/save/` answers 403 "You do not have permission"); this server asks for `client_type: "web"` so saving works. Connections made before that change need to be reconnected once.
+- `web.getmatter.com/api/save` is the web app's own Next.js route and 403s any non-browser caller.
 
 ## License
 

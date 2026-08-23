@@ -12,27 +12,42 @@ export interface MatterTokens {
   refreshToken: string;
 }
 
-// Library state enum values from the API
+/**
+ * Library state values, as defined by the Matter web app's own constants
+ * (LIBRARY_STATE_UNSAVED/SAVED/ARCHIVED/DELETED). UNSAVED is an item that
+ * arrived through a feed or newsletter and was never saved to the queue.
+ */
 export enum LibraryState {
+  UNSAVED = 0,
   QUEUE = 1,
-  LATER = 2,
-  ARCHIVE = 3,
-  FEED = 4,
+  ARCHIVE = 2,
+  DELETED = 3,
 }
 
 export function libraryStateToString(state: number): string {
   switch (state) {
+    case LibraryState.UNSAVED:
+      return "UNSAVED";
     case LibraryState.QUEUE:
       return "QUEUE";
-    case LibraryState.LATER:
-      return "LATER";
     case LibraryState.ARCHIVE:
       return "ARCHIVE";
-    case LibraryState.FEED:
-      return "FEED";
+    case LibraryState.DELETED:
+      return "DELETED";
     default:
-      return "UNKNOWN";
+      return `UNKNOWN (${state})`;
   }
+}
+
+export type ArticleStatusFilter = "queue" | "archive";
+
+/** Deleted entries stay in the feed forever; nobody listing their articles wants them. */
+export function isListable(entry: FeedEntry, status?: ArticleStatusFilter): boolean {
+  const state = entry.content.library?.library_state;
+  if (state === LibraryState.DELETED) return false;
+  if (status === "queue") return state === LibraryState.QUEUE;
+  if (status === "archive") return state === LibraryState.ARCHIVE;
+  return true;
 }
 
 export interface Profile {
@@ -163,9 +178,13 @@ export interface TokenRefreshResponse {
   refresh_token: string;
 }
 
+/** Loosely typed: the save endpoint's shape is not documented and has changed before. */
 export interface SaveArticleResponse {
-  id: number;
-  content_id: number;
+  id?: number | string;
+  content_id?: number | string;
+  url?: string;
+  title?: string;
+  [key: string]: unknown;
 }
 
 export class MatterAPIError extends Error {
@@ -176,6 +195,26 @@ export class MatterAPIError extends Error {
   ) {
     super(message);
     this.name = "MatterAPIError";
+  }
+
+  /** "HTTP 403 Forbidden: <what the API said>" — the body is where Matter explains itself. */
+  static async fromResponse(response: Response, context?: string): Promise<MatterAPIError> {
+    const text = await response.text().catch(() => "");
+    let detail = text;
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      const picked = body.detail ?? body.error ?? body.message ?? body.non_field_errors;
+      if (picked !== undefined) detail = typeof picked === "string" ? picked : JSON.stringify(picked);
+    } catch {
+      // not JSON; keep the raw text
+    }
+    const where = context ? ` ${context}` : "";
+    const summary = detail ? `: ${detail.slice(0, 300)}` : "";
+    return new MatterAPIError(
+      `Matter API request failed${where} (HTTP ${response.status} ${response.statusText})${summary}`,
+      response.status,
+      text
+    );
   }
 }
 
@@ -218,10 +257,7 @@ export class MatterClient {
         });
 
         if (!retryResponse.ok) {
-          throw new MatterAPIError(
-            `Request failed after token refresh: ${retryResponse.statusText}`,
-            retryResponse.status
-          );
+          throw await MatterAPIError.fromResponse(retryResponse, "after token refresh");
         }
         return retryResponse.json() as Promise<T>;
       }
@@ -229,17 +265,7 @@ export class MatterClient {
     }
 
     if (!response.ok) {
-      let errorBody: unknown;
-      try {
-        errorBody = await response.json();
-      } catch {
-        errorBody = await response.text();
-      }
-      throw new MatterAPIError(
-        `Request failed: ${response.statusText}`,
-        response.status,
-        errorBody
-      );
+      throw await MatterAPIError.fromResponse(response);
     }
 
     return response.json() as Promise<T>;
@@ -277,17 +303,22 @@ export class MatterClient {
   }
 
   /**
-   * Get all articles from the user's library (updates feed)
-   * Supports pagination through the feed
+   * List the user's articles from the updates feed, most recently changed
+   * first. Deleted entries are skipped, and `status` narrows to the queue or
+   * the archive. `offset` skips that many matching articles, so the caller can
+   * page without a cursor; `hasMore` says whether anything followed the page.
    */
   async getArticles(options?: {
     limit?: number;
-    page?: number;
+    offset?: number;
+    status?: ArticleStatusFilter;
     afterTimestamp?: string;
-  }): Promise<{ articles: FeedEntry[]; nextUrl: string | null; queueCount?: number; archiveCount?: number }> {
-    const allArticles: FeedEntry[] = [];
+  }): Promise<{ articles: FeedEntry[]; hasMore: boolean; queueCount?: number; archiveCount?: number }> {
     const limit = options?.limit || 100;
-    let page = options?.page || 1;
+    const offset = options?.offset || 0;
+    const wanted = offset + limit;
+    const matching: FeedEntry[] = [];
+    let page = 1;
 
     // Use a very old timestamp to get all articles, or use provided timestamp
     const afterTimestamp = options?.afterTimestamp || "1970-01-01T00:00:00.000000+00:00";
@@ -296,11 +327,12 @@ export class MatterClient {
     let queueCount: number | undefined;
     let archiveCount: number | undefined;
 
-    while (hasMore && allArticles.length < limit) {
+    // One extra article beyond the page tells us whether there is a next page.
+    while (hasMore && matching.length <= wanted) {
       const url = `/library_items/updates_feed/?after_timestamp=${encodeURIComponent(afterTimestamp)}&page=${page}`;
       const response: FeedResponse = await this.request<FeedResponse>(url);
 
-      allArticles.push(...response.feed);
+      matching.push(...response.feed.filter((entry) => isListable(entry, options?.status)));
 
       // Store counts from first response
       if (page === 1) {
@@ -310,20 +342,11 @@ export class MatterClient {
 
       hasMore = response.next !== null;
       page++;
-
-      if (allArticles.length >= limit) {
-        return {
-          articles: allArticles.slice(0, limit),
-          nextUrl: response.next,
-          queueCount,
-          archiveCount,
-        };
-      }
     }
 
     return {
-      articles: allArticles,
-      nextUrl: null,
+      articles: matching.slice(offset, wanted),
+      hasMore: matching.length > wanted,
       queueCount,
       archiveCount,
     };
@@ -339,18 +362,16 @@ export class MatterClient {
     let page = 1;
     let hasMore = true;
 
-    // Parse the articleId - it could be a string like "111847745" or a number
-    const numericId = parseInt(articleId, 10);
+    // Exact match only: ids are the numeric content id the list shows (or the
+    // feed entry's own id). parseInt would make "123abc" resolve to article 123.
+    const wanted = articleId.trim();
 
     while (hasMore) {
       const url = `/library_items/updates_feed/?after_timestamp=${encodeURIComponent(afterTimestamp)}&page=${page}`;
       const feedResponse: FeedResponse = await this.request<FeedResponse>(url);
 
       const article = feedResponse.feed.find(
-        (entry: FeedEntry) =>
-          entry.id === articleId ||
-          entry.content.id === numericId ||
-          String(entry.content.id) === articleId
+        (entry: FeedEntry) => entry.id === wanted || String(entry.content.id) === wanted
       );
 
       if (article) {
@@ -365,26 +386,26 @@ export class MatterClient {
   }
 
   /**
-   * Save a new article to Matter queue
-   * Uses the web.getmatter.com/api/save endpoint
+   * Save a new article to the Matter queue. This is the `/save/` route the
+   * web app itself posts to; `web.getmatter.com/api/save` is that app's own
+   * Next.js handler and answers 403 to anything that isn't the browser.
    */
   async saveArticle(url: string): Promise<SaveArticleResponse> {
-    const response = await this.request<SaveArticleResponse>(
-      "https://web.getmatter.com/api/save",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          url,
-          user_agent: "Matter MCP Server/1.0",
-        }),
-      }
-    );
-    return response;
+    return this.request<SaveArticleResponse>("/save/", {
+      method: "POST",
+      body: JSON.stringify({
+        url,
+        user_agent: "Matter MCP Server/1.0",
+      }),
+    });
   }
 
   /**
-   * Static method to initiate QR code login flow
-   * Returns a session token and QR code URL for the user to scan
+   * Start the QR code login flow; the user scans the returned session token
+   * with the Matter app. The client type decides what the resulting tokens may
+   * do: "integration" (what the Obsidian plugin uses) is read-only and gets
+   * "You do not have permission" from /save/, so ask for a "web" token, which
+   * can do everything the web app can.
    */
   static async triggerQRLogin(): Promise<QRLoginResponse> {
     const response = await fetch(`${API_BASE}/qr_login/trigger/`, {
@@ -392,7 +413,7 @@ export class MatterClient {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ client_type: "integration" }),
+      body: JSON.stringify({ client_type: "web" }),
     });
 
     if (!response.ok) {
